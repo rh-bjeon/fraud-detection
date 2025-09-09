@@ -1,0 +1,375 @@
+# PIPELINE DEFINITION
+# Name: 7-get-data-train-upload
+components:
+  comp-get-data:
+    executorLabel: exec-get-data
+    outputDefinitions:
+      artifacts:
+        train_data_output_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        validate_data_output_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        train_data_input_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        validate_data_input_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        model_output_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-upload-model:
+    executorLabel: exec-upload-model
+    inputDefinitions:
+      artifacts:
+        input_model_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-get-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - get_data
+        command:
+        - sh
+        - -c
+        - |
+          if ! [ -x "$(command -v pip)" ]; then
+              python3 -m ensurepip || python3 -m ensurepip --user || apt-get install -y python3-pip
+          fi
+
+          PIP_DISABLE_PIP_VERSION_CHECK=1 \
+          python3 -m pip install --no-warn-script-location \
+          --index-url http://admin:nexusabc@nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/repository/pypi-internal/simple/ \
+          --trusted-host nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com \
+          --quiet \
+          --no-deps \
+          'kfp==2.14.3' \
+          'typing-extensions>=3.7.4,<5; python_version<"3.9"' && "$0" "$@"
+
+        - sh
+        - -ec
+        - |
+          program_path=$(mktemp -d)
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
+
+        - |
+          import kfp
+          from kfp import dsl
+          from kfp.dsl import *
+          from typing import *
+
+          def get_data(train_data_output_path: OutputPath(), validate_data_output_path: OutputPath()):
+              import urllib.request
+              from urllib.request import Request
+              from urllib.error import HTTPError
+              import base64
+              import os
+              import traceback
+
+              print("starting download from gitea...")
+
+              username = 'opentlc-mgr'
+              password = 'openshift'
+              auth_string = f"{username}:{password}"
+              base64string = base64.b64encode(auth_string.encode()).decode("ascii")
+              headers = {"Authorization": f"Basic {base64string}"}
+
+              train_url = "https://gitea.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/opentlc-mgr/fraud-detection/raw/branch/main/data/train.csv"
+              validate_url = "https://gitea.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/opentlc-mgr/fraud-detection/raw/branch/main/data/validate.csv"
+
+              def download_file(url, output_path):
+                  try:
+                      print("=== FILE DOWNLOAD ===")
+                      print(f"output_path: {output_path}")
+                      print(f"dir name: {os.path.dirname(output_path)}")
+                      os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+                      req = Request(url, headers=headers)
+                      with urllib.request.urlopen(req) as response, open(output_path, 'wb') as out_file:
+                          content = response.read()
+                          out_file.write(content)
+                          out_file.flush()
+                          os.fsync(out_file.fileno())
+                      print(f"[SUCCESS] Saved to {output_path}, size={len(content)} bytes")
+
+                  except Exception as e:
+                      print("[ERROR] Exception occurred during download")
+                      traceback.print_exc()
+                      with open(output_path, 'w') as f:
+                          f.write("empty\n")
+                      print(f"[FALLBACK] Dummy file written to {output_path}")
+
+              print(f"train_data_output_path = {train_data_output_path}")
+              print(f"validate_data_output_path = {validate_data_output_path}")
+
+              download_file(train_url, train_data_output_path)
+              download_file(validate_url, validate_data_output_path)
+
+              print("[COMPLETE] Downloads done")
+              print("train exists?", os.path.exists(train_data_output_path))
+              print("validate exists?", os.path.exists(validate_data_output_path))
+        image: quay.io/hanayou/runtime-cuda-tensorflow-ubi9-python-3.9:poc
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - |
+          if ! [ -x "$(command -v pip)" ]; then
+              python3 -m ensurepip || python3 -m ensurepip --user || apt-get install -y python3-pip
+          fi
+
+          PIP_DISABLE_PIP_VERSION_CHECK=1 \
+          python3 -m pip install --no-warn-script-location \
+          --index-url http://admin:nexusabc@nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/repository/pypi-internal/simple/ \
+          --trusted-host nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com \
+          --quiet \
+          --no-deps \
+          'kfp==2.14.3' \
+          'typing-extensions>=3.7.4,<5; python_version<"3.9"' && \
+          python3 -m pip install --no-warn-script-location \
+          --index-url http://admin:nexusabc@nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/repository/pypi-internal/simple/ \
+          --trusted-host nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com \
+          --quiet \
+          'onnx==1.17.0' \
+          'onnxruntime==1.19.2' \
+          'tf2onnx==1.16.1' && \
+          "$0" "$@"
+        - sh
+        - -ec
+        - |
+          program_path=$(mktemp -d)
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
+        - |
+          import kfp
+          from kfp import dsl
+          from kfp.dsl import *
+          from typing import *
+
+          def train_model(train_data_input_path: InputPath(), validate_data_input_path: InputPath(), model_output_path: OutputPath()):
+              import numpy as np
+              import pandas as pd
+              from keras.models import Sequential
+              from keras.layers import Dense, Dropout, BatchNormalization, Activation
+              from sklearn.model_selection import train_test_split
+              from sklearn.preprocessing import StandardScaler
+              from sklearn.utils import class_weight
+              import tf2onnx
+              import onnx
+              import pickle
+              from pathlib import Path
+
+              feature_indexes = [1, 2, 4, 5, 6]
+              label_indexes = [7]
+
+              X_train = pd.read_csv(train_data_input_path)
+              y_train = X_train.iloc[:, label_indexes]
+              X_train = X_train.iloc[:, feature_indexes]
+
+              X_val = pd.read_csv(validate_data_input_path)
+              y_val = X_val.iloc[:, label_indexes]
+              X_val = X_val.iloc[:, feature_indexes]
+
+              scaler = StandardScaler()
+              X_train = scaler.fit_transform(X_train.values)
+
+              Path("artifact").mkdir(parents=True, exist_ok=True)
+              with open("artifact/scaler.pkl", "wb") as handle:
+                  pickle.dump(scaler, handle)
+
+              class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_train), y=y_train.values.ravel())
+              class_weights = {i: class_weights[i] for i in range(len(class_weights))}
+
+              model = Sequential()
+              model.add(Dense(32, activation='relu', input_dim=len(feature_indexes)))
+              model.add(Dropout(0.2))
+              model.add(Dense(32))
+              model.add(BatchNormalization())
+              model.add(Activation('relu'))
+              model.add(Dropout(0.2))
+              model.add(Dense(32))
+              model.add(BatchNormalization())
+              model.add(Activation('relu'))
+              model.add(Dropout(0.2))
+              model.add(Dense(1, activation='sigmoid'))
+              model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+              model.summary()
+
+              history = model.fit(
+                  X_train, y_train,
+                  epochs=2,
+                  validation_data=(scaler.transform(X_val.values), y_val),
+                  verbose=True,
+                  class_weight=class_weights
+              )
+
+              model_proto, _ = tf2onnx.convert.from_keras(model)
+              onnx.save(model_proto, model_output_path)
+        image: quay.io/hanayou/runtime-cuda-tensorflow-ubi9-python-3.9:poc
+
+    exec-upload-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - upload_model
+        command:
+        - sh
+        - -c
+        - |
+          if ! [ -x "$(command -v pip)" ]; then
+              python3 -m ensurepip || python3 -m ensurepip --user || apt-get install -y python3-pip
+          fi
+
+          PIP_DISABLE_PIP_VERSION_CHECK=1 \
+          python3 -m pip install --no-warn-script-location \
+          --index-url http://admin:nexusabc@nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/repository/pypi-internal/simple/ \
+          --trusted-host nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com \
+          --quiet \
+          --no-deps \
+          'kfp==2.14.3' \
+          'typing-extensions>=3.7.4,<5; python_version<"3.9"' && \
+          python3 -m pip install --no-warn-script-location \
+          --index-url http://admin:nexusabc@nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com/repository/pypi-internal/simple/ \
+          --trusted-host nexus.apps.cluster-j7gvc.j7gvc.sandbox5498.opentlc.com \
+          --quiet \
+          'boto3==1.35.55' \
+          'botocore==1.35.55' && \
+          "$0" "$@"
+        - sh
+        - -ec
+        - |
+          program_path=$(mktemp -d)
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
+        - |
+          import kfp
+          from kfp import dsl
+          from kfp.dsl import *
+          from typing import *
+
+          def upload_model(input_model_path: InputPath()):
+              import os
+              import boto3
+              import botocore
+
+              aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
+              aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+              endpoint_url = os.environ.get('AWS_S3_ENDPOINT')
+              region_name = os.environ.get('AWS_DEFAULT_REGION')
+              bucket_name = os.environ.get('AWS_S3_BUCKET')
+              s3_key = os.environ.get('S3_KEY')
+
+              session = boto3.session.Session(
+                  aws_access_key_id=aws_access_key_id,
+                  aws_secret_access_key=aws_secret_access_key
+              )
+
+              s3_resource = session.resource(
+                  's3',
+                  config=botocore.client.Config(signature_version='s3v4'),
+                  endpoint_url=endpoint_url,
+                  region_name=region_name
+              )
+
+              bucket = s3_resource.Bucket(bucket_name)
+              print(f"Uploading {s3_key}")
+              bucket.upload_file(input_model_path, s3_key)
+        env:
+        - name: S3_KEY
+          value: models/fraud/1/model.onnx
+        image: quay.io/hanayou/runtime-cuda-tensorflow-ubi9-python-3.9:poc
+pipelineInfo:
+  name: 7-get-data-train-upload
+root:
+  dag:
+    tasks:
+      get-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-get-data
+        taskInfo:
+          name: get-data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - get-data
+        inputs:
+          artifacts:
+            train_data_input_path:
+              taskOutputArtifact:
+                outputArtifactKey: train_data_output_path
+                producerTask: get-data
+            validate_data_input_path:
+              taskOutputArtifact:
+                outputArtifactKey: validate_data_output_path
+                producerTask: get-data
+        taskInfo:
+          name: train-model
+      upload-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-upload-model
+        dependentTasks:
+        - train-model
+        inputs:
+          artifacts:
+            input_model_path:
+              taskOutputArtifact:
+                outputArtifactKey: model_output_path
+                producerTask: train-model
+        taskInfo:
+          name: upload-model
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.14.3
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-upload-model:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            - envVar: AWS_S3_BUCKET
+              secretKey: AWS_S3_BUCKET
+            - envVar: AWS_S3_ENDPOINT
+              secretKey: AWS_S3_ENDPOINT
+            secretName: my-storage

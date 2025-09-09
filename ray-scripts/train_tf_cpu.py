@@ -199,9 +199,25 @@ train_dataset = ray.data.read_csv(
     filesystem=pyarrow_fs,
     paths=f"s3://{bucket_name}/{train_data}")
 scaler = StandardScaler(columns=feature_columns)
-concatenator = Concatenator(include=feature_columns, output_column_name=output_column_name)
+# 기존
+# concatenator = Concatenator(include=feature_columns, output_column_name=output_column_name)
+
+# 변경 (신/구 버전 호환)
+try:
+    concatenator = Concatenator(columns=feature_columns,  # 신버전 API
+                                output_column_name=output_column_name)
+except TypeError:
+    concatenator = Concatenator(include=feature_columns,  # 구버전 대비
+                                output_column_name=output_column_name)
+# 기존
+# train_dataset = scaler.fit_transform(train_dataset)
+# train_dataset = concatenator.fit_transform(train_dataset)
+
+# 변경 (Concatenator는 stateless → transform 사용)
 train_dataset = scaler.fit_transform(train_dataset)
-train_dataset = concatenator.fit_transform(train_dataset)
+train_dataset = (concatenator.fit_transform(train_dataset)
+                 if hasattr(concatenator, "fit_transform")
+                 else concatenator.transform(train_dataset))
 
 print(scaler.stats_)
 

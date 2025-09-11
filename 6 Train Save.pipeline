@@ -175,7 +175,7 @@
             "kubernetes_pod_annotations": [],
             "env_vars": [],
             "kubernetes_secrets": [],
-            "runtime_image": "quay.io/modh/runtime-images@sha256:1186ac6c9026d1091f707fe8cedfcc1ea12d1ec46edd9e8d56bb4b12ba048630"
+            "runtime_image": "quay.io/modh/odh-pipeline-runtime-tensorflow-cuda-py311-ubi9@sha256:1cf03aec67cb6bc0e95450c6007fab2e6f5b6bcb0372c52be925bd11333cc598"
           },
           "pipeline_parameters": []
         }
